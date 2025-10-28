@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Swift Package Manager
+/.build/
+/Packages/
+/Package.resolved
+
+# App bundles
+*.ipa
+*.app
+
+# Temporary or cache files
+*.swp
+
