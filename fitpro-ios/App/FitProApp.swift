@@ -2,15 +2,18 @@ import SwiftUI
 
 @main
 struct FitProApp: App {
-    // New Observation framework (iOS 17+)
     @State private var session = SessionStore()
-    private let env = AppEnvironment()
+
+    // Pass a token provider that reads from Session (Keychain later)
+    private var env: AppEnvironment {
+        .init(apiBaseURL: API.baseURL, tokenProvider: { session.token })
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(session)                 // inject SessionStore
-                .environment(\.appEnvironment, env)  // inject AppEnvironment via custom key
+                .environment(session)
+                .environment(\.appEnvironment, env)
         }
     }
 }
