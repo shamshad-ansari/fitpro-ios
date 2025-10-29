@@ -1,5 +1,6 @@
 import Foundation
 
+// MARK: - Support types at file scope (✅ fix)
 enum HTTPMethod: String { case GET, POST, PUT, PATCH, DELETE }
 
 struct APIError: Error, LocalizedError {
@@ -7,6 +8,23 @@ struct APIError: Error, LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
+
+// Server response envelope: { success, data, message }
+struct Envelope<D: Decodable>: Decodable {
+    let success: Bool
+    let data: D?
+    let message: String?
+}
+
+// Type-erasure helper to encode any Encodable body
+private struct AnyEncodable: Encodable {
+    private let encodeFunc: (Encoder) throws -> Void
+    init(_ encodable: Encodable) { self.encodeFunc = encodable.encode }
+    func encode(to encoder: Encoder) throws { try encodeFunc(encoder) }
+}
+
+// For endpoints returning no data payload
+private struct Empty: Decodable {}
 
 struct APIRequest {
     var path: String
@@ -27,10 +45,11 @@ final class APIClient {
 
     func send<T: Decodable>(_ req: APIRequest, as type: T.Type) async throws -> T {
         var urlRequest = try buildURLRequest(from: req)
-        // Attach auth token if present
+
         if let token = tokenProvider() {
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         return try decodeResponse(data: data, response: response, as: T.self)
     }
@@ -59,44 +78,28 @@ final class APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError(status: -1, message: "Invalid response")
         }
-        // Your backend envelope is { success, data, message }
-        struct Envelope<D: Decodable>: Decodable {
-            let success: Bool
-            let data: D?
-            let message: String?
-        }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
         if (200..<300).contains(http.statusCode) {
-            // Try to decode either envelope or raw T (for health endpoints etc.)
-            if let env = try? decoder.decode(Envelope<T>.self, from: data), let payload = env.data {
+            // Try to decode our standard envelope first
+            if let env = try? decoder.decode(Envelope<T>.self, from: data),
+               let payload = env.data {
                 return payload
-            } else if let raw = try? decoder.decode(T.self, from: data) {
-                return raw
-            } else {
-                // If body is empty but T is Void-like, allow this to fail loudly for now
-                throw APIError(status: http.statusCode, message: "Decoding failed")
             }
+            // Fallback: some endpoints might return raw T (e.g., health)
+            if let raw = try? decoder.decode(T.self, from: data) {
+                return raw
+            }
+            throw APIError(status: http.statusCode, message: "Decoding failed")
         } else {
-            // Extract server message if possible
+            // Try to extract a server-provided message
             if let env = try? decoder.decode(Envelope<Empty>.self, from: data),
-               let msg = env.message {
+               let msg = env.message, !msg.isEmpty {
                 throw APIError(status: http.statusCode, message: msg)
             }
             throw APIError(status: http.statusCode, message: "HTTP \(http.statusCode)")
         }
     }
 }
-
-// Type-erasure helper to encode any Encodable body
-private struct AnyEncodable: Encodable {
-    private let encodeFunc: (Encoder) throws -> Void
-    init(_ encodable: Encodable) {
-        self.encodeFunc = encodable.encode
-    }
-    func encode(to encoder: Encoder) throws { try encodeFunc(encoder) }
-}
-
-private struct Empty: Decodable {}
