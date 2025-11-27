@@ -4,12 +4,11 @@ struct LoginView: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.appEnvironment) private var env
 
-    // Make the view model non-optional
+    // Non-optional VM; we replace placeholder onAppear when env is available
     @State private var viewModel: LoginViewModel
 
-    // Custom initializer so we can inject dependencies
     init() {
-        // Assigning a dummy placeholder first; actual injection happens later using onAppear
+        // Placeholder dependencies; real ones injected onAppear
         _viewModel = State(initialValue: LoginViewModel(
             auth: AuthService(api: APIClient(baseURL: API.baseURL)),
             session: SessionStore()
@@ -17,36 +16,53 @@ struct LoginView: View {
     }
 
     var body: some View {
-        // Create the real instance using the environment
         let factory = ServiceFactory(env: env)
 
-        // Replace placeholder with correct one when view appears
-        Form {
-            Section(header: Text("Sign in")) {
-                TextField("Email", text: $viewModel.email)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.emailAddress)
-                SecureField("Password", text: $viewModel.password)
-            }
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l.rawValue) {
+                    Text("Sign in")
+                        .font(Theme.Font.title)
 
-            if let msg = viewModel.errorMessage {
-                Text(msg).foregroundStyle(.red)
-            }
+                    // ⬇️ Use primitives so future redesign is easy
+                    FormTextField(
+                        label: "Email",
+                        text: $viewModel.email,
+                        keyboard: .emailAddress,
+                        autocap: .never
+                    )
 
-            Button {
-                Task { await viewModel.login() }
-            } label: {
-                if viewModel.isLoading {
-                    ProgressView()
-                } else {
-                    Text("Log In")
+                    FormSecureField(
+                        label: "Password",
+                        text: $viewModel.password
+                    )
+
+                    if let msg = viewModel.errorMessage, !msg.isEmpty {
+                        Text(msg)
+                            .font(Theme.Font.label)
+                            .foregroundStyle(Theme.Color.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    PrimaryButton(title: viewModel.isLoading ? "Signing in…" : "Log In",
+                                  isLoading: viewModel.isLoading) {
+                        Task { await viewModel.login() }
+                    }
+
+                    // (Optional) secondary actions area
+                    // Button("Forgot password?") { /* later */ }
+                    //     .font(Theme.Font.label)
+                    //     .foregroundStyle(Theme.Color.subtle)
                 }
+                .padding(.horizontal, Theme.Spacing.l.rawValue)
+                .padding(.top, Theme.Spacing.xl.rawValue)
             }
-            .disabled(viewModel.isLoading)
+            .background(Theme.Color.bg.ignoresSafeArea())
+            .navigationTitle("Login")
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationTitle("Login")
         .onAppear {
-            // inject real dependencies once environment values are available
+            // ✅ Safe: inject real dependencies once environment values are available
             viewModel = LoginViewModel(auth: factory.authService(), session: session)
         }
     }

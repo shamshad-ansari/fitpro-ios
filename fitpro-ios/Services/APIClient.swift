@@ -1,11 +1,15 @@
 import Foundation
 
-// MARK: - Support types at file scope (✅ fix)
-enum HTTPMethod: String { case GET, POST, PUT, PATCH, DELETE }
+// MARK: - Support types at file scope
 
-struct APIError: Error, LocalizedError {
+enum HTTPMethod: String {
+    case GET, POST, PUT, PATCH, DELETE
+}
+
+struct APIError: Error, LocalizedError, Equatable, Codable {
     let status: Int
     let message: String
+
     var errorDescription: String? { message }
 }
 
@@ -19,19 +23,30 @@ struct Envelope<D: Decodable>: Decodable {
 // Type-erasure helper to encode any Encodable body
 private struct AnyEncodable: Encodable {
     private let encodeFunc: (Encoder) throws -> Void
-    init(_ encodable: Encodable) { self.encodeFunc = encodable.encode }
-    func encode(to encoder: Encoder) throws { try encodeFunc(encoder) }
+
+    init(_ encodable: Encodable) {
+        self.encodeFunc = encodable.encode
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try encodeFunc(encoder)
+    }
 }
 
 // For endpoints returning no data payload
 private struct Empty: Decodable {}
 
+// MARK: - Request type (with query support)
+
 struct APIRequest {
     var path: String
     var method: HTTPMethod = .GET
     var headers: [String: String] = [:]
+    var query: [String: String]? = nil
     var body: Encodable? = nil
 }
+
+// MARK: - API Client
 
 @MainActor
 final class APIClient {
@@ -46,7 +61,7 @@ final class APIClient {
     func send<T: Decodable>(_ req: APIRequest, as type: T.Type) async throws -> T {
         var urlRequest = try buildURLRequest(from: req)
 
-        if let token = tokenProvider() {
+        if let token = tokenProvider(), !token.isEmpty {
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
@@ -57,20 +72,35 @@ final class APIClient {
     // MARK: - Helpers
 
     private func buildURLRequest(from req: APIRequest) throws -> URLRequest {
-        let url = baseURL.appendingPathComponent(req.path)
-        var urlRequest = URLRequest(url: url)
+        var url = baseURL
+        if req.path.hasPrefix("/") {
+            url.appendPathComponent(String(req.path.dropFirst()))
+        } else {
+            url.appendPathComponent(req.path)
+        }
+
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if let q = req.query, !q.isEmpty {
+            components?.queryItems = q.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let finalURL = components?.url else {
+            throw APIError(status: -1, message: "Invalid URL")
+        }
+
+        var urlRequest = URLRequest(url: finalURL)
         urlRequest.httpMethod = req.method.rawValue
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // merge user headers
-        req.headers.forEach { k, v in urlRequest.setValue(v, forHTTPHeaderField: k) }
+        req.headers.forEach { k, v in
+            urlRequest.setValue(v, forHTTPHeaderField: k)
+        }
 
-        // encode body if any
         if let enc = req.body {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             urlRequest.httpBody = try encoder.encode(AnyEncodable(enc))
         }
+
         return urlRequest
     }
 
@@ -83,22 +113,27 @@ final class APIClient {
         decoder.dateDecodingStrategy = .iso8601
 
         if (200..<300).contains(http.statusCode) {
-            // Try to decode our standard envelope first
-            if let env = try? decoder.decode(Envelope<T>.self, from: data),
-               let payload = env.data {
-                return payload
+            if let env = try? decoder.decode(Envelope<T>.self, from: data) {
+                if let payload = env.data {
+                    return payload
+                }
+                if env.success {
+                    return (Optional<T>.none as! T)
+                }
+                throw APIError(status: http.statusCode, message: env.message ?? "Unknown error")
             }
-            // Fallback: some endpoints might return raw T (e.g., health)
+
             if let raw = try? decoder.decode(T.self, from: data) {
                 return raw
             }
+
             throw APIError(status: http.statusCode, message: "Decoding failed")
         } else {
-            // Try to extract a server-provided message
             if let env = try? decoder.decode(Envelope<Empty>.self, from: data),
                let msg = env.message, !msg.isEmpty {
                 throw APIError(status: http.statusCode, message: msg)
             }
+
             throw APIError(status: http.statusCode, message: "HTTP \(http.statusCode)")
         }
     }
