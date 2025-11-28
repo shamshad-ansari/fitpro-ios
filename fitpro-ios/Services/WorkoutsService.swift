@@ -35,6 +35,18 @@ final class WorkoutsService {
         let req = APIRequest(path: "/api/workouts", method: .POST, body: payload)
         return try await api.send(req, as: WorkoutRoutine.self)
     }
+    
+    // NEW: Update Routine
+    func updateRoutine(id: String, payload: CreateRoutinePayload) async throws -> WorkoutRoutine {
+        let req = APIRequest(path: "/api/workouts/\(id)", method: .PATCH, body: payload)
+        return try await api.send(req, as: WorkoutRoutine.self)
+    }
+    
+    // NEW: Delete Routine
+    func deleteRoutine(id: String) async throws {
+        let req = APIRequest(path: "/api/workouts/\(id)", method: .DELETE)
+        _ = try await api.send(req, as: VoidResponse.self)
+    }
 
     // MARK: - Sessions (history)
 
@@ -74,5 +86,11 @@ final class WorkoutsService {
             query: query.isEmpty ? nil : query
         )
         return try await api.send(req, as: [WorkoutSession].self)
+    }
+    
+    // NEW: Delete Session
+    func deleteSession(id: String) async throws {
+        let req = APIRequest(path: "/api/workouts/sessions/\(id)", method: .DELETE)
+        _ = try await api.send(req, as: VoidResponse.self)
     }
 }

@@ -12,8 +12,8 @@ struct FormTextField: View {
             TextField(label, text: $text)
                 .textInputAutocapitalization(autocap)
                 .keyboardType(keyboard)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
+                .padding(.vertical, Theme.Spacing.xs.rawValue)
+                .padding(.horizontal, Theme.Spacing.s.rawValue)
                 .background(Theme.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s.rawValue, style: .continuous))
         }
@@ -28,8 +28,8 @@ struct FormSecureField: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs.rawValue) {
             Text(label).font(Theme.Font.label).foregroundStyle(Theme.Color.subtle)
             SecureField(label, text: $text)
-                .padding(.vertical, 10)
-                .padding(.horizontal, 12)
+                .padding(.vertical, Theme.Spacing.xs.rawValue)
+                .padding(.horizontal, Theme.Spacing.s.rawValue)
                 .background(Theme.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s.rawValue, style: .continuous))
         }

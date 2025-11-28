@@ -8,23 +8,24 @@ struct HistoryView: View {
         let factory = ServiceFactory(env: env)
 
         NavigationStack {
-            Group {
-                if let model = vm {
-                    content(model)
-                        .task {
-                            if model.sessions.isEmpty {
-                                await model.load()
+            ZStack {
+                Theme.Color.bg.ignoresSafeArea()
+                
+                Group {
+                    if let model = vm {
+                        content(model)
+                            .task {
+                                if model.sessions.isEmpty { await model.load() }
                             }
-                        }
-                        .refreshable {
-                            await model.refresh()
-                        }
-                } else {
-                    ProgressView("Loading history…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .refreshable { await model.refresh() }
+                    } else {
+                        ProgressView()
+                            .tint(Theme.Color.primaryAccent)
+                    }
                 }
             }
             .navigationTitle("History")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 if vm == nil {
                     vm = HistoryViewModel(workouts: factory.workoutsService())
@@ -33,107 +34,193 @@ struct HistoryView: View {
         }
     }
 
-    // MARK: - Content
-
     @ViewBuilder
     private func content(_ model: HistoryViewModel) -> some View {
         if model.isLoading && model.sessions.isEmpty {
-            ProgressView("Loading…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView()
+                .tint(Theme.Color.primaryAccent)
         } else if !model.sessions.isEmpty {
-            List(model.sessions) { s in
-                sessionRow(s)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            ScrollView {
+                LazyVStack(spacing: Theme.Spacing.m.rawValue) {
+                    ForEach(model.sessions) { session in
+                                            DetailedSessionCard(session: session) {
+                                                Task { await model.delete(session: session) }
+                                            }
+                                        }
+                }
+                .padding(Theme.Spacing.l.rawValue)
             }
-            .listStyle(.plain)
         } else {
-            ContentUnavailableView(
-                "No workout history",
-                systemImage: "clock",
-                description: Text("Finish a workout to see it here.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ContentUnavailableView {
+                Label("No History", systemImage: "clock")
+                    .foregroundStyle(Theme.Color.primaryAccent)
+            } description: {
+                Text("Complete a workout to see it here.")
+            }
         }
     }
+}
 
-    // MARK: - Row
+// MARK: - Detailed Session Card
 
-    private func sessionRow(_ s: WorkoutSession) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Routine name + date
-            HStack {
-                Text(s.routine?.name ?? "Workout")
-                    .font(.headline)
-
+private struct DetailedSessionCard: View {
+    let session: WorkoutSession
+    var onDelete: (() -> Void)? // Callback
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            
+            // 1. Header Section
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.routine?.name ?? "Workout")
+                        .font(Theme.Font.h3)
+                        .foregroundStyle(Theme.Color.text)
+                    
+                    Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(Theme.Font.label)
+                        .foregroundStyle(Theme.Color.subtle)
+                        .textCase(.uppercase)
+                }
                 Spacer()
-
-                Text(s.startedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                
+                // Duration Badge
+                if let duration = session.durationSec {
+                    Text(formatDuration(duration))
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Theme.Color.bg)
+                        .foregroundStyle(Theme.Color.text)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Theme.Color.border, lineWidth: 1)
+                        )
+                }
+                
+                // Menu Icon
+                Menu {
+                    Button(role: .destructive) {
+                        onDelete?()
+                    } label: {
+                        Label("Delete History", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(Theme.Color.subtle)
+                        .padding(.leading, 8)
+                        .padding(8) // Larger touch target
+                }
             }
-
-            // Duration
-            if let duration = s.durationSec {
-                let minutes = duration / 60
-                let seconds = duration % 60
-                Text("Duration: \(minutes)m \(seconds)s")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            .padding(Theme.Spacing.m.rawValue)
+            .background(Theme.Color.surface)
+            
+            // ... rest of the card (Divider, Exercises) remains the same ...
+            Divider().background(Theme.Color.border)
+            
+            VStack(alignment: .leading, spacing: Theme.Spacing.l.rawValue) {
+                ForEach(session.exercises) { ex in
+                    ExerciseDetailRow(exercise: ex)
+                }
             }
+            .padding(Theme.Spacing.m.rawValue)
+            .background(Theme.Color.bg.opacity(0.5))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.l.rawValue))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.l.rawValue)
+                .stroke(Theme.Color.border, lineWidth: 1)
+        )
+        .shadow(
+            color: Color.black.opacity(Theme.Elevation.card.o),
+            radius: Theme.Elevation.card.r,
+            x: Theme.Elevation.card.x,
+            y: Theme.Elevation.card.y
+        )
+    }
+    
+    private func formatDuration(_ sec: Int) -> String {
+        let m = sec / 60
+        return "\(m) min"
+    }
+}
 
-            // Exercises + sets
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(s.exercises) { ex in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(ex.name)
-                            .font(.subheadline)
-                            .bold()
+// MARK: - Exercise Detail Row
 
-                        // Header row
-                        HStack {
-                            Text("SET")
-                                .frame(width: 40, alignment: .leading)
-                            Text("WEIGHT")
-                                .frame(width: 70, alignment: .leading)
-                            Text("REPS")
-                                .frame(width: 50, alignment: .leading)
+private struct ExerciseDetailRow: View {
+    let exercise: WorkoutSession.ExerciseEntry
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s.rawValue) {
+            // Exercise Name + Note
+            VStack(alignment: .leading, spacing: 4) {
+                Text(exercise.name)
+                    .font(Theme.Font.body)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Theme.Color.text)
+                
+                if let note = exercise.notes, !note.isEmpty {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(Theme.Color.subtle)
+                }
+            }
+            
+            // Sets List - cleaner design matching the reference
+            VStack(spacing: 8) {
+                ForEach(exercise.sets) { set in
+                    HStack(spacing: Theme.Spacing.s.rawValue) {
+                        // Set Number Badge - soft rounded square like in reference
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Theme.Color.primaryAccent.opacity(0.15))
+                            
+                            Text("\(set.index)")
+                                .font(Theme.Font.body)
+                                .foregroundStyle(Theme.Color.primaryAccent)
                         }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                        // Set rows
-                        ForEach(ex.sets) { set in
-                            HStack {
-                                Text("\(set.index)")
-                                    .frame(width: 40, alignment: .leading)
-
-                                if let w = set.weightKg {
-                                    Text("\(Int(w))")
-                                        .frame(width: 70, alignment: .leading)
-                                } else {
-                                    Text("-")
-                                        .frame(width: 70, alignment: .leading)
-                                }
-
-                                if let r = set.reps {
-                                    Text("\(r)")
-                                        .frame(width: 50, alignment: .leading)
-                                } else {
-                                    Text("-")
-                                        .frame(width: 50, alignment: .leading)
-                                }
+                        .frame(width: 44, height: 44)
+                        
+                        // Performance Display - clean and simple
+                        HStack(spacing: 4) {
+                            if let w = set.weightKg {
+                                Text("\(Int(w))")
+                                    .font(Theme.Font.body)
+                                    .foregroundStyle(Theme.Color.text)
+                                Text("kg")
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.Color.subtle)
                             }
-                            .font(.caption)
+                            
+                            if set.weightKg != nil && set.reps != nil {
+                                Text("×")
+                                    .font(Theme.Font.body)
+                                    .foregroundStyle(Theme.Color.subtle)
+                            }
+                            
+                            if let r = set.reps {
+                                Text("\(r)")
+                                    .font(Theme.Font.body)
+                                    .foregroundStyle(Theme.Color.text)
+                                Text("reps")
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.Color.subtle)
+                            }
+                        }
+                        
+                        Spacer()
+                        
+                        // Volume Badge - subtle
+                        if let w = set.weightKg, let r = set.reps {
+                            Text("\(Int(w * Double(r))) kg")
+                                .font(.caption)
+                                .foregroundStyle(Theme.Color.subtle)
                         }
                     }
-                    .padding(10)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
         }
-        .padding(.vertical, 6)
     }
 }
- 

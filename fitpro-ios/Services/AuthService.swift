@@ -4,9 +4,11 @@ struct Credentials: Encodable {
     let email: String
     let password: String
 }
+
 struct SignupPayload: Encodable {
     let email: String
     let name: String
+    let age: Int // Added to match backend requirement
     let password: String
 }
 
@@ -24,15 +26,16 @@ final class AuthService {
         return try await api.send(req, as: LoginResponse.self)
     }
 
-    func signup(email: String, name: String, password: String) async throws -> VoidResponse {
+    // Updated signature to include Age
+    func signup(email: String, name: String, age: Int, password: String) async throws -> VoidResponse {
         let req = APIRequest(
             path: "/api/auth/signup",
             method: .POST,
-            body: SignupPayload(email: email, name: name, password: password)
+            body: SignupPayload(email: email, name: name, age: age, password: password)
         )
         return try await api.send(req, as: VoidResponse.self)
     }
 }
 
-// Some endpoints just return success with no data; this matches { success, data: null, message }
+// Some endpoints just return success with no data
 struct VoidResponse: Codable {}

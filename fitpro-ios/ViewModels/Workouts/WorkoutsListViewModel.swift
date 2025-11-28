@@ -21,12 +21,23 @@ final class WorkoutsListViewModel {
 
         do {
             let data = try await service.listRoutines()
-            // For now, show non-archived only (backend already filters, but just in case)
             self.routines = data.filter { $0.isArchived != true }
         } catch let err as APIError {
             errorMessage = err.message
         } catch {
             errorMessage = "Failed to load workouts."
+        }
+    }
+    
+    func delete(routine: WorkoutRoutine) async {
+        do {
+            try await service.deleteRoutine(id: routine.id)
+            // Remove locally
+            if let idx = routines.firstIndex(where: { $0.id == routine.id }) {
+                routines.remove(at: idx)
+            }
+        } catch {
+            errorMessage = "Failed to delete routine."
         }
     }
 }

@@ -3,30 +3,32 @@ import Foundation
 @MainActor
 @Observable
 final class HomeViewModel {
-    private let exercises: ExercisesService
+    private let workoutsService: WorkoutsService
+    private let usersService: UsersService
+    private let nutritionService: NutritionService // <-- NEW DEPENDENCY
 
-    // Inputs / config
-    private let rangeDays: Int = 7
-
+    // MARK: - Dashboard Data
+    
+    var userName: String = "User"
+    var routines: [WorkoutRoutine] = []
+    var recentActivity: [WorkoutSession] = []
+    
+    // Nutrition Data (NEW)
+    var nutritionSummary: NutritionSummary?
+    
+    // Stats
+    var weeklyWorkouts: Int = 0
+    var totalWorkouts: Int = 0
+    var currentStreak: Int = 0
+    
     // State
     var isLoading = false
     var errorMessage: String?
 
-    // Today snapshot
-    var todayWorkouts: Int = 0
-    var todayMinutes: Double = 0
-    var todayCalories: Double = 0
-
-    // Range totals (last 7 days)
-    var totalWorkouts: Int = 0
-    var totalMinutes: Double = 0
-    var totalCalories: Double = 0
-
-    // Most recent exercise
-    var lastExercise: Exercise?
-
-    init(exercises: ExercisesService) {
-        self.exercises = exercises
+    init(workouts: WorkoutsService, users: UsersService, nutrition: NutritionService) {
+        self.workoutsService = workouts
+        self.usersService = users
+        self.nutritionService = nutrition
     }
 
     func load() async {
@@ -34,104 +36,63 @@ final class HomeViewModel {
         errorMessage = nil
         defer { isLoading = false }
 
-        let cal = Calendar(identifier: .gregorian)
-        let end = Date()
-        guard let start = cal.date(byAdding: .day, value: -rangeDays + 1, to: end) else { return }
-        let from = start.ymdKey()
-        let to   = end.ymdKey()
-
         do {
-            // 1) Try server summary
-            if let serverDaily = try? await fetchServerSummary(from: from, to: to) {
-                computeStats(from: serverDaily, todayKey: end.ymdKey())
-                // Also try to fetch the most recent exercise for display
-                try await loadLastExercise(from: from, to: to)
-                return
-            }
-
-            // 2) Fallback: fetch exercises and aggregate client-side
-            let page1 = try await exercises.list(.init(from: from, to: to, page: 1, limit: 200))
-            let aggregated = aggregate(exercises: page1.items, days: rangeDays)
-            computeStats(from: aggregated, todayKey: end.ymdKey())
-            // The list is already newest → oldest from backend; first item is lastExercise
-            lastExercise = page1.items.first
-
+            // Parallel Fetching: User, Routines, History, Nutrition
+            async let userTask = usersService.me()
+            async let routinesTask = workoutsService.listRoutines()
+            async let sessionsTask = workoutsService.listSessions()
+            async let nutritionTask = nutritionService.getSummary(date: Date()) // Fetch today's nutrition
+            
+            let (user, allRoutines, sessions, nutSummary) = try await (userTask, routinesTask, sessionsTask, nutritionTask)
+            
+            // Assign Data
+            self.userName = user.name.components(separatedBy: " ").first ?? user.name
+            self.routines = allRoutines.filter { $0.isArchived != true }
+            self.nutritionSummary = nutSummary
+            
+            // Stats Logic
+            let sortedSessions = sessions.sorted { $0.startedAt > $1.startedAt }
+            self.recentActivity = Array(sortedSessions.prefix(5))
+            self.totalWorkouts = sessions.count
+            self.weeklyWorkouts = calculateWeeklyWorkouts(sessions)
+            self.currentStreak = calculateStreak(sessions)
+            
         } catch let err as APIError {
             errorMessage = err.message
         } catch {
-            errorMessage = "Failed to load dashboard."
+            // Ignore nutrition errors silently if just starting out, or log them
+            print("Dashboard load error: \(error)")
         }
     }
-
-    // MARK: - Server summary
-
-    private func fetchServerSummary(from: String, to: String) async throws -> [DailyStat] {
-        let s: [ExercisesService.DailySummary] = try await exercises.summary(from: from, to: to)
-        return s.map { d in
-            DailyStat(
-                date: d.date,
-                totalDurationMin: d.totalDurationMin ?? 0,
-                totalCalories: d.totalCalories ?? 0,
-                count: d.count
-            )
-        }
+    
+    // MARK: - Logic Helpers
+    
+    private func calculateWeeklyWorkouts(_ sessions: [WorkoutSession]) -> Int {
+        let cal = Calendar.current
+        let now = Date()
+        guard let startOfWeek = cal.date(byAdding: .day, value: -7, to: now) else { return 0 }
+        return sessions.filter { $0.startedAt >= startOfWeek }.count
     }
-
-    private func loadLastExercise(from: String, to: String) async throws {
-        // Ask the backend for most recent exercise in the range
-        let page1 = try await exercises.list(.init(from: from, to: to, page: 1, limit: 1))
-        lastExercise = page1.items.first
-    }
-
-    // MARK: - Client-side aggregation fallback
-
-    private func aggregate(exercises items: [Exercise], days: Int) -> [DailyStat] {
-        var bucket: [String: (mins: Double, cals: Double, count: Int)] = [:]
-        for ex in items {
-            let key = ex.performedAt.ymdKey()
-            var acc = bucket[key] ?? (0, 0, 0)
-            acc.mins += ex.durationMin ?? 0
-            acc.cals += ex.calories ?? 0
-            acc.count += 1
-            bucket[key] = acc
+    
+    private func calculateStreak(_ sessions: [WorkoutSession]) -> Int {
+        let cal = Calendar.current
+        let uniqueDays = Set(sessions.map { cal.startOfDay(for: $0.startedAt) }).sorted(by: >)
+        
+        var streak = 0
+        var checkDate = cal.startOfDay(for: Date())
+        
+        if !uniqueDays.contains(checkDate) {
+            checkDate = cal.date(byAdding: .day, value: -1, to: checkDate)!
         }
-
-        let cal = Calendar(identifier: .gregorian)
-        let end = Date()
-        let start = cal.date(byAdding: .day, value: -days + 1, to: end) ?? end
-
-        var out: [DailyStat] = []
-        var d = start
-        while d <= end {
-            let key = d.ymdKey()
-            let v = bucket[key] ?? (0, 0, 0)
-            out.append(DailyStat(
-                date: key,
-                totalDurationMin: v.mins,
-                totalCalories: v.cals,
-                count: v.count
-            ))
-            d = cal.date(byAdding: .day, value: 1, to: d)!
+        
+        for day in uniqueDays {
+            if cal.isDate(day, inSameDayAs: checkDate) {
+                streak += 1
+                checkDate = cal.date(byAdding: .day, value: -1, to: checkDate)!
+            } else {
+                break
+            }
         }
-
-        return out.sorted { $0.date > $1.date } // newest first
-    }
-
-    // MARK: - Compute final stats
-
-    private func computeStats(from dailies: [DailyStat], todayKey: String) {
-        totalWorkouts = dailies.reduce(0) { $0 + $1.count }
-        totalMinutes  = dailies.reduce(0) { $0 + $1.totalDurationMin }
-        totalCalories = dailies.reduce(0) { $0 + $1.totalCalories }
-
-        if let today = dailies.first(where: { $0.date == todayKey }) {
-            todayWorkouts = today.count
-            todayMinutes  = today.totalDurationMin
-            todayCalories = today.totalCalories
-        } else {
-            todayWorkouts = 0
-            todayMinutes  = 0
-            todayCalories = 0
-        }
+        return streak
     }
 }

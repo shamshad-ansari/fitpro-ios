@@ -15,9 +15,9 @@ struct PrimaryButton: View {
             }
             .padding(.vertical, Theme.Spacing.m.rawValue)
             .padding(.horizontal, Theme.Spacing.l.rawValue)
-            .background(Theme.Color.accent)
+            .background(Theme.Color.primaryAccent)
             .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m.rawValue, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl.rawValue, style: .continuous))
         }
         .disabled(isLoading)
     }

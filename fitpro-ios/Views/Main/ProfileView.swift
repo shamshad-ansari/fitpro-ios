@@ -8,127 +8,266 @@ struct ProfileView: View {
     @State private var showEdit = false
 
     var body: some View {
+        let factory = ServiceFactory(env: env)
+
         NavigationStack {
-            Group {
+            ZStack {
+                Theme.Color.bg.ignoresSafeArea()
+                
                 if let model = vm {
-                    content(model)
-                        .task {
-                            if model.user == nil && !model.isLoading {
-                                await model.load()
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: Theme.Spacing.l.rawValue) {
+                            
+                            // 1. Profile Header
+                            if let user = model.user {
+                                ProfileHeader(user: user)
+                            }
+                            
+                            // 2. Stats Grid
+                            StatsGrid(model: model)
+                            
+                            // 3. Settings List
+                            SettingsSection(
+                                onEditProfile: { showEdit = true }
+                            )
+                            
+                            // 4. Logout Button
+                            Button(action: { session.logout() }) {
+                                HStack {
+                                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    Text("Log Out")
+                                }
+                                .font(Theme.Font.button)
+                                .foregroundStyle(Theme.Color.danger)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Theme.Color.danger.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m.rawValue))
+                            }
+                            .padding(.horizontal, Theme.Spacing.l.rawValue)
+                            .padding(.bottom, 40)
+                        }
+                        .padding(.top, Theme.Spacing.xl.rawValue)
+                    }
+                    .refreshable { await model.load() }
+                    .sheet(isPresented: $showEdit) {
+                        if let u = model.user {
+                            EditProfileView(initial: u) { name, level, age, height, weight, goals in
+                                Task {
+                                    if await model.save(name: name, fitnessLevel: level, age: age, heightCm: height, weightKg: weight, goals: goals) {
+                                        showEdit = false
+                                    }
+                                }
                             }
                         }
-                        .refreshable { await model.load() }
+                    }
                 } else {
-                    ProgressView("Preparing profile…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ProgressView().tint(Theme.Color.primaryAccent)
                 }
             }
-            .navigationTitle("Profile")
-            .toolbar {
-                if vm != nil {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Logout") { session.logout() }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Edit") { showEdit = true }
-                            .disabled(vm?.user == nil)
-                    }
-                }
-            }
+            .navigationBarHidden(true)
             .onAppear {
                 if vm == nil {
-                    let factory = ServiceFactory(env: env)
-                    vm = ProfileViewModel(users: factory.usersService())
+                    vm = ProfileViewModel(
+                        users: factory.usersService(),
+                        workouts: factory.workoutsService()
+                    )
+                }
+            }
+            .task {
+                if let model = vm, model.user == nil {
+                    await model.load()
                 }
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func content(_ model: ProfileViewModel) -> some View {
-        if model.isLoading && model.user == nil {
-            ProgressView("Loading profile…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let u = model.user {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.l.rawValue) {
+// MARK: - Components
 
-                    sectionCard(title: "Account") {
-                        LabeledContent("Email", value: u.email)
-                        LabeledContent("Name", value: u.name)
-                    }
+private struct ProfileHeader: View {
+    let user: User
+    
+    var initials: String {
+        let components = user.name.components(separatedBy: " ")
+        let first = components.first?.prefix(1) ?? ""
+        let last = components.count > 1 ? components.last?.prefix(1) ?? "" : ""
+        return "\(first)\(last)".uppercased()
+    }
+    
+    var memberSince: String {
+        guard let date = user.createdAt else { return "Member" }
+        return "Member since \(date.formatted(.dateTime.month().year()))"
+    }
 
-                    sectionCard(title: "Fitness") {
-                        LabeledContent("Level", value: u.fitnessLevel ?? "—")
-                        LabeledContent("Age", value: u.age.map(String.init) ?? "—")
-                        LabeledContent("Height (cm)", value: u.heightCm?.formatted() ?? "—")
-                        LabeledContent("Weight (kg)", value: u.weightKg?.formatted() ?? "—")
-                    }
+    var body: some View {
+        VStack(spacing: Theme.Spacing.m.rawValue) {
+            // Avatar Circle
+            ZStack {
+                Circle()
+                    .fill(Theme.Color.primaryAccent.opacity(0.2))
+                    .frame(width: 100, height: 100)
+                
+                Text(initials)
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundStyle(Theme.Color.primaryAccent)
+            }
+            
+            // Text Info
+            VStack(spacing: 4) {
+                Text(user.name)
+                    .font(Theme.Font.h2)
+                    .foregroundStyle(Theme.Color.text)
+                
+                Text(user.email)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.Color.subtle)
+            }
+            
+            // Member Pill
+            Text(memberSince)
+                .font(.caption)
+                .foregroundStyle(Theme.Color.subtle)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Theme.Color.surface)
+                .clipShape(Capsule())
+        }
+    }
+}
 
-                    sectionCard(title: "Goals") {
-                        LabeledContent("Type", value: u.goals?.goalType ?? "—")
-                        LabeledContent("Target (kg)", value: u.goals?.targetWeightKg?.formatted() ?? "—")
-                        LabeledContent("Weekly Workouts", value: u.goals?.weeklyWorkouts.map(String.init) ?? "—")
-                    }
+private struct StatsGrid: View {
+    let model: ProfileViewModel
+    
+    // Grid Layout: 2 columns
+    let columns = [
+        GridItem(.flexible(), spacing: Theme.Spacing.m.rawValue),
+        GridItem(.flexible(), spacing: Theme.Spacing.m.rawValue)
+    ]
+    
+    var volumeString: String {
+        let val = model.totalVolumeKg
+        if val >= 1000 {
+            return String(format: "%.1fK", val / 1000)
+        }
+        return String(format: "%.0f", val)
+    }
 
-                    if let err = model.errorMessage, !err.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(err)
-                                .font(Theme.Font.body)
-                                .foregroundStyle(Theme.Color.danger)
-                        }
-                        .card()
-                    }
-                }
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m.rawValue) {
+            Text("Your Stats")
+                .font(Theme.Font.h3)
+                .foregroundStyle(Theme.Color.text)
+            
+            LazyVGrid(columns: columns, spacing: Theme.Spacing.m.rawValue) {
+                StatBox(
+                    icon: "dumbbell.fill",
+                    value: "\(model.totalWorkouts)",
+                    label: "Total Workouts"
+                )
+                StatBox(
+                    icon: "flame.fill",
+                    value: "\(model.currentStreak)",
+                    label: "Current Streak"
+                )
+                StatBox(
+                    icon: "trophy.fill",
+                    value: "\(model.longestStreak)",
+                    label: "Longest Streak"
+                )
+                StatBox(
+                    icon: "scalemass.fill",
+                    value: volumeString,
+                    label: "Total Volume (kg)"
+                )
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.l.rawValue)
+    }
+}
+
+private struct StatBox: View {
+    let icon: String
+    let value: String
+    let label: String
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 24))
+                .foregroundStyle(Theme.Color.primaryAccent)
+            
+            Text(value)
+                .font(Theme.Font.h2)
+                .foregroundStyle(Theme.Color.text)
+            
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(Theme.Color.subtle)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .padding(.horizontal, 8)
+        .background(Theme.Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.l.rawValue))
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+    }
+}
+
+private struct SettingsSection: View {
+    let onEditProfile: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m.rawValue) {
+            Text("Settings")
+                .font(Theme.Font.h3)
+                .foregroundStyle(Theme.Color.text)
                 .padding(.horizontal, Theme.Spacing.l.rawValue)
-                .padding(.vertical, Theme.Spacing.l.rawValue)
-                .background(Theme.Color.bg.ignoresSafeArea())
+            
+            VStack(spacing: 0) {
+                SettingsRow(icon: "person", title: "Edit Profile", action: onEditProfile)
+                Divider().padding(.leading, 50)
+                
+                SettingsRow(icon: "bell", title: "Notifications", action: {})
+                Divider().padding(.leading, 50)
+                
+                SettingsRow(icon: "chart.bar", title: "Units & Preferences", action: {})
+                Divider().padding(.leading, 50)
+                
+                SettingsRow(icon: "info.circle", title: "About", action: {})
             }
-            .sheet(isPresented: $showEdit) {
-                EditProfileView(
-                    initial: u,
-                    onSave: { name, level, age, height, weight, goals in
-                        Task {
-                            let ok = await model.save(
-                                name: name,
-                                fitnessLevel: level,
-                                age: age,
-                                heightCm: height,
-                                weightKg: weight,
-                                goals: goals
-                            )
-                            if ok { showEdit = false }
-                        }
-                    }
-                )
-            }
-        } else {
-            VStack(spacing: Theme.Spacing.m.rawValue) {
-                ContentUnavailableView(
-                    "Couldn’t load your profile",
-                    systemImage: "person.crop.circle.badge.exclamationmark",
-                    description: Text(model.errorMessage ?? "Please try again.")
-                )
-                Button {
-                    Task { await model.load() }
-                } label: {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.Color.surface)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.l.rawValue))
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
             .padding(.horizontal, Theme.Spacing.l.rawValue)
         }
     }
+}
 
-    // MARK: - Local layout helper using design tokens
-    @ViewBuilder
-    private func sectionCard(title: String, @ViewBuilder _ content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s.rawValue) {
-            Text(title).sectionHeader()
-            VStack(alignment: .leading, spacing: 8) {
-                content()
+private struct SettingsRow: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.m.rawValue) {
+                Image(systemName: icon)
+                    .foregroundStyle(Theme.Color.primaryAccent)
+                    .frame(width: 24)
+                
+                Text(title)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.Color.text)
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(Theme.Color.subtle)
             }
-            .card()
+            .padding()
         }
     }
 }

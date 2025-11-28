@@ -33,4 +33,15 @@ final class HistoryViewModel {
     func refresh() async {
         await load()
     }
+    
+    func delete(session: WorkoutSession) async {
+        do {
+            try await workouts.deleteSession(id: session.id)
+            if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+                sessions.remove(at: idx)
+            }
+        } catch {
+            errorMessage = "Failed to delete history item."
+        }
+    }
 }
