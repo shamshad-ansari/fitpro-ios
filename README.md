@@ -12,17 +12,16 @@
 
 ## 📱 App Screenshots
 
-| Dashboard | Workout Tracker | Nutrition Log | Profile & Stats |
-|:---:|:---:|:---:|:---:|
-| <img src="docs/dashboard.png" width="200"> | <img src="docs/workout.png" width="200"> | <img src="docs/nutrition.png" width="200"> | <img src="docs/profile.png" width="200"> |
+| Dashboard | Workout Tracker | Nutrition Log |
+|:---:|:---:|:---:|
+| <img src="assets/dashboard.png" width="200"> | <img src="assets/workout.png" width="200"> | <img src="assets/nutrition.png" width="200"> |
 
-> *Note: Replace `docs/image.png` with actual screenshots in your repo.*
 
 ---
 
 ## 🎬 Project Demo
 
-![App Demo](path/to/your/demo.gif)
+![App Demo](assets/demo.gif)
 
 <!-- To add a demo GIF:
 1. Record your app using a screen recorder or iOS Simulator recording
