@@ -21,7 +21,7 @@
 
 ## 🎬 Project Demo
 
-![App Demo](assets/demo.gif)
+<img src="assets/demo.gif" width="400" alt="App Demo">
 
 <!-- To add a demo GIF:
 1. Record your app using a screen recorder or iOS Simulator recording
